@@ -2,14 +2,7 @@
 
 This repository contains the solutions for the Operating Systems Laboratory assignments. The code demonstrates proficiency in Linux shell scripting, system calls, process management, and file handling in a UNIX environment.
 
-## 👨‍💻 Team Members
-
-| Name | Roll Number |
-| :--- | :--- |
-| **Aayush Praveen** | 24AI002 |
 | **Abhinav Mishra** | 24AI004 |
-| **Aditya Kumar** | 24AI007 |
-| **Aman Sharma** | 24AI010 |
 
 ---
 
