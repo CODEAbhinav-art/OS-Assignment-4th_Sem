@@ -1,14 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <time.h>
+#include <string.h>
 
-#define MAX 100
+#define MAX 200
+#define QUANTUM 2
 
 typedef struct {
-    int pid, arrival, burst, remaining;
+    int pid, arrival, burst, remaining, priority;
     int completion, waiting, turnaround, response;
     int started;
 } Process;
+
+typedef struct {
+    Process p[MAX];
+    int n;
+    int algo;   // 1 FCFS, 2 SJF, 3 SRTN, 4 RR, 5 PRIORITY
+} ThreadData;
+
+pthread_mutex_t lock;
+FILE *fp;
 
 /* ---------------- Utility ---------------- */
 
@@ -23,226 +35,212 @@ void generateProcesses(Process p[], int n) {
         p[i].arrival = rand() % 5;
         p[i].burst = (rand() % 10) + 1;
         p[i].remaining = p[i].burst;
+        p[i].priority = rand() % 10;
         p[i].started = 0;
     }
 }
 
-/* ---------------- FCFS ---------------- */
+/* ---------------- Algorithms ---------------- */
 
 void fcfs(Process p[], int n) {
     int time = 0;
-
     for (int i = 0; i < n; i++) {
-        if (time < p[i].arrival)
-            time = p[i].arrival;
-
+        if (time < p[i].arrival) time = p[i].arrival;
         p[i].response = time - p[i].arrival;
-
         time += p[i].burst;
-
         p[i].completion = time;
-        p[i].turnaround = p[i].completion - p[i].arrival;
+        p[i].turnaround = time - p[i].arrival;
         p[i].waiting = p[i].turnaround - p[i].burst;
     }
 }
 
-/* ---------------- SJF (Non-preemptive) ---------------- */
-
 void sjf(Process p[], int n) {
-    int completed = 0, time = 0;
-
-    while (completed < n) {
-        int idx = -1, minBurst = 1e9;
-
+    int done = 0, time = 0;
+    while (done < n) {
+        int idx = -1, min = 1e9;
         for (int i = 0; i < n; i++) {
-            if (p[i].arrival <= time && p[i].remaining > 0 && p[i].burst < minBurst) {
-                minBurst = p[i].burst;
+            if (p[i].remaining > 0 && p[i].arrival <= time && p[i].burst < min) {
+                min = p[i].burst;
                 idx = i;
             }
         }
-
-        if (idx == -1) {
-            time++;
-            continue;
-        }
-
+        if (idx == -1) { time++; continue; }
         p[idx].response = time - p[idx].arrival;
-
         time += p[idx].burst;
         p[idx].remaining = 0;
-
         p[idx].completion = time;
-        p[idx].turnaround = p[idx].completion - p[idx].arrival;
+        p[idx].turnaround = time - p[idx].arrival;
         p[idx].waiting = p[idx].turnaround - p[idx].burst;
-
-        completed++;
+        done++;
     }
 }
 
-/* ---------------- SRTN (Preemptive SJF) ---------------- */
-
 void srtn(Process p[], int n) {
-    int completed = 0, time = 0;
-
-    while (completed < n) {
-        int idx = -1, minRem = 1e9;
-
+    int done = 0, time = 0;
+    while (done < n) {
+        int idx = -1, min = 1e9;
         for (int i = 0; i < n; i++) {
-            if (p[i].arrival <= time && p[i].remaining > 0 && p[i].remaining < minRem) {
-                minRem = p[i].remaining;
+            if (p[i].arrival <= time && p[i].remaining > 0 && p[i].remaining < min) {
+                min = p[i].remaining;
                 idx = i;
             }
         }
-
-        if (idx == -1) {
-            time++;
-            continue;
-        }
-
+        if (idx == -1) { time++; continue; }
         if (!p[idx].started) {
             p[idx].response = time - p[idx].arrival;
             p[idx].started = 1;
         }
-
         p[idx].remaining--;
         time++;
-
         if (p[idx].remaining == 0) {
-            completed++;
+            done++;
             p[idx].completion = time;
-            p[idx].turnaround = p[idx].completion - p[idx].arrival;
+            p[idx].turnaround = time - p[idx].arrival;
             p[idx].waiting = p[idx].turnaround - p[idx].burst;
         }
     }
 }
 
-/* ---------------- Round Robin ---------------- */
-
-void rr(Process p[], int n, int quantum) {
-    int time = 0, completed = 0;
+void rr(Process p[], int n) {
     int queue[MAX], front = 0, rear = 0;
     int visited[MAX] = {0};
+    int time = 0, done = 0;
 
     queue[rear++] = 0;
     visited[0] = 1;
 
-    while (completed < n) {
-        int idx = queue[front++];
+    while (done < n) {
+        int i = queue[front++];
 
-        if (!p[idx].started) {
-            p[idx].response = time - p[idx].arrival;
-            p[idx].started = 1;
+        if (!p[i].started) {
+            p[i].response = time - p[i].arrival;
+            p[i].started = 1;
         }
 
-        int exec = (p[idx].remaining < quantum) ? p[idx].remaining : quantum;
-
-        p[idx].remaining -= exec;
+        int exec = (p[i].remaining < QUANTUM) ? p[i].remaining : QUANTUM;
+        p[i].remaining -= exec;
         time += exec;
 
-        for (int i = 0; i < n; i++) {
-            if (!visited[i] && p[i].arrival <= time) {
-                queue[rear++] = i;
-                visited[i] = 1;
+        for (int j = 0; j < n; j++) {
+            if (!visited[j] && p[j].arrival <= time) {
+                queue[rear++] = j;
+                visited[j] = 1;
             }
         }
 
-        if (p[idx].remaining > 0) {
-            queue[rear++] = idx;
+        if (p[i].remaining > 0) {
+            queue[rear++] = i;
         } else {
-            completed++;
-            p[idx].completion = time;
-            p[idx].turnaround = p[idx].completion - p[idx].arrival;
-            p[idx].waiting = p[idx].turnaround - p[idx].burst;
+            done++;
+            p[i].completion = time;
+            p[i].turnaround = time - p[i].arrival;
+            p[i].waiting = p[i].turnaround - p[i].burst;
         }
+    }
+}
+
+void priorityScheduling(Process p[], int n) {
+    int done = 0, time = 0;
+    while (done < n) {
+        int idx = -1, best = 1e9;
+        for (int i = 0; i < n; i++) {
+            if (p[i].remaining > 0 && p[i].arrival <= time && p[i].priority < best) {
+                best = p[i].priority;
+                idx = i;
+            }
+        }
+        if (idx == -1) { time++; continue; }
+        p[idx].response = time - p[idx].arrival;
+        time += p[idx].burst;
+        p[idx].remaining = 0;
+        p[idx].completion = time;
+        p[idx].turnaround = time - p[idx].arrival;
+        p[idx].waiting = p[idx].turnaround - p[idx].burst;
+        done++;
     }
 }
 
 /* ---------------- Output ---------------- */
 
-void printResults(Process p[], int n, const char *name, FILE *fp) {
-    float avgWT = 0, avgTAT = 0, avgRT = 0;
-    int totalBurst = 0, lastCompletion = 0;
+void printResults(Process p[], int n, char *name) {
+    float avgWT=0, avgTAT=0, avgRT=0;
+    int totalBurst=0, last=0;
+
+    pthread_mutex_lock(&lock);
 
     printf("\n--- %s ---\n", name);
-    printf("PID\tAT\tBT\tWT\tTAT\tRT\n");
-
     fprintf(fp, "\\section*{%s}\n", name);
-    fprintf(fp, "PID & AT & BT & WT & TAT & RT \\\\\n");
 
-    for (int i = 0; i < n; i++) {
-        printf("%d\t%d\t%d\t%d\t%d\t%d\n",
-               p[i].pid, p[i].arrival, p[i].burst,
-               p[i].waiting, p[i].turnaround, p[i].response);
-
-        fprintf(fp, "%d & %d & %d & %d & %d & %d \\\\\n",
-                p[i].pid, p[i].arrival, p[i].burst,
-                p[i].waiting, p[i].turnaround, p[i].response);
-
-        avgWT += p[i].waiting;
-        avgTAT += p[i].turnaround;
-        avgRT += p[i].response;
-        totalBurst += p[i].burst;
-
-        if (p[i].completion > lastCompletion)
-            lastCompletion = p[i].completion;
+    for (int i=0;i<n;i++) {
+        avgWT+=p[i].waiting;
+        avgTAT+=p[i].turnaround;
+        avgRT+=p[i].response;
+        totalBurst+=p[i].burst;
+        if(p[i].completion>last) last=p[i].completion;
     }
 
-    printf("Avg WT=%.2f | Avg TAT=%.2f | Avg RT=%.2f\n",
-           avgWT/n, avgTAT/n, avgRT/n);
+    float cpu = (float)totalBurst/last*100;
 
-    float cpuUtil = (float)totalBurst / lastCompletion * 100;
-    printf("CPU Utilization: %.2f%%\n", cpuUtil);
+    printf("Avg WT=%.2f Avg TAT=%.2f Avg RT=%.2f CPU=%.2f%%\n",
+            avgWT/n, avgTAT/n, avgRT/n, cpu);
 
-    fprintf(fp, "\\\\ Avg WT=%.2f, Avg TAT=%.2f, Avg RT=%.2f \\\\\n",
-            avgWT/n, avgTAT/n, avgRT/n);
-    fprintf(fp, "CPU Utilization=%.2f\\%%\n\n", cpuUtil);
+    fprintf(fp,"AvgWT=%.2f AvgTAT=%.2f AvgRT=%.2f CPU=%.2f\\%%\n\n",
+            avgWT/n, avgTAT/n, avgRT/n, cpu);
+
+    pthread_mutex_unlock(&lock);
+}
+
+/* ---------------- Thread ---------------- */
+
+void* runAlgo(void* arg) {
+    ThreadData *d = (ThreadData*)arg;
+
+    switch(d->algo) {
+        case 1: fcfs(d->p,d->n); printResults(d->p,d->n,"FCFS"); break;
+        case 2: sjf(d->p,d->n); printResults(d->p,d->n,"SJF"); break;
+        case 3: srtn(d->p,d->n); printResults(d->p,d->n,"SRTN"); break;
+        case 4: rr(d->p,d->n); printResults(d->p,d->n,"RR"); break;
+        case 5: priorityScheduling(d->p,d->n); printResults(d->p,d->n,"PRIORITY"); break;
+    }
+    pthread_exit(NULL);
 }
 
 /* ---------------- MAIN ---------------- */
 
 int main() {
-    int n, choice, quantum = 2;
+    int choice, n;
 
-    Process original[MAX], temp[MAX];
-
-    printf("CPU Scheduling Simulator\n");
-    printf("1.FCFS 2.SJF 3.SRTN 4.RR 5.ALL\n");
-    scanf("%d", &choice);
+    printf("1.FCFS 2.SJF 3.SRTN 4.RR 5.Priority 6.ALL\n");
+    scanf("%d",&choice);
 
     printf("Enter number of processes: ");
-    scanf("%d", &n);
+    scanf("%d",&n);
 
-    generateProcesses(original, n);
+    Process original[MAX];
+    generateProcesses(original,n);
 
-    FILE *fp = fopen("output.tex", "w");
+    fp = fopen("output.tex","w");
+    pthread_mutex_init(&lock,NULL);
 
-    if (choice == 1 || choice == 5) {
-        copyProcesses(original, temp, n);
-        fcfs(temp, n);
-        printResults(temp, n, "FCFS", fp);
+    pthread_t threads[5];
+    ThreadData td[5];
+
+    int total = (choice==6)?5:1;
+
+    for(int i=0;i<total;i++) {
+        td[i].n = n;
+        td[i].algo = (choice==6)? i+1 : choice;
+        copyProcesses(original, td[i].p, n);
+
+        pthread_create(&threads[i],NULL,runAlgo,&td[i]);
     }
 
-    if (choice == 2 || choice == 5) {
-        copyProcesses(original, temp, n);
-        sjf(temp, n);
-        printResults(temp, n, "SJF", fp);
-    }
+    for(int i=0;i<total;i++)
+        pthread_join(threads[i],NULL);
 
-    if (choice == 3 || choice == 5) {
-        copyProcesses(original, temp, n);
-        srtn(temp, n);
-        printResults(temp, n, "SRTN", fp);
-    }
-
-    if (choice == 4 || choice == 5) {
-        copyProcesses(original, temp, n);
-        rr(temp, n, quantum);
-        printResults(temp, n, "Round Robin", fp);
-    }
-
+    pthread_mutex_destroy(&lock);
     fclose(fp);
 
-    printf("\nResults also saved in output.tex\n");
-
+    printf("\nResults saved in output.tex\n");
     return 0;
 }
