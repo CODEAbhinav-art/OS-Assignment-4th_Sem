@@ -1,182 +1,120 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <string.h>
 
-#define MAX 50
+/* Data structure to pass to threads */
+typedef struct {
+    int *blocks;
+    int *processes;
+    int *pages;
+    int m, n, f, total_pages;
+    char name[20];
+} AlgoData;
 
-/* ---------------- BEST FIT ---------------- */
+pthread_mutex_t print_lock;
 
-void bestFit(int blocks[], int m, int processes[], int n) {
-    int allocation[MAX];
-    for (int i = 0; i < n; i++) allocation[i] = -1;
+/* ---------------- BEST FIT THREAD ---------------- */
+void* bestFitThread(void* arg) {
+    AlgoData *d = (AlgoData*)arg;
+    int *allocation = malloc(d->n * sizeof(int));
+    for (int i = 0; i < d->n; i++) allocation[i] = -1;
 
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < d->n; i++) {
         int bestIdx = -1;
-
-        for (int j = 0; j < m; j++) {
-            if (blocks[j] >= processes[i]) {
-                if (bestIdx == -1 || blocks[j] < blocks[bestIdx])
+        for (int j = 0; j < d->m; j++) {
+            if (d->blocks[j] >= d->processes[i]) {
+                if (bestIdx == -1 || d->blocks[j] < d->blocks[bestIdx])
                     bestIdx = j;
             }
         }
-
         if (bestIdx != -1) {
             allocation[i] = bestIdx;
-            blocks[bestIdx] -= processes[i];
+            d->blocks[bestIdx] -= d->processes[i];
         }
     }
 
-    printf("\n--- Best Fit ---\n");
-    for (int i = 0; i < n; i++)
-        printf("Process %d -> Block %d\n", i+1, allocation[i]+1);
+    pthread_mutex_lock(&print_lock);
+    printf("\n--- %s ---\n", d->name);
+    for (int i = 0; i < d->n; i++)
+        printf("Process %d (%d) -> Block %d\n", i+1, d->processes[i], allocation[i]+1);
+    pthread_mutex_unlock(&print_lock);
+
+    free(allocation);
+    return NULL;
 }
 
-/* ---------------- WORST FIT ---------------- */
+/* ---------------- FIFO THREAD ---------------- */
+void* fifoThread(void* arg) {
+    AlgoData *d = (AlgoData*)arg;
+    int *frames = malloc(d->f * sizeof(int));
+    int front = 0, faults = 0;
 
-void worstFit(int blocks[], int m, int processes[], int n) {
-    int allocation[MAX];
-    for (int i = 0; i < n; i++) allocation[i] = -1;
+    for (int i = 0; i < d->f; i++) frames[i] = -1;
 
-    for (int i = 0; i < n; i++) {
-        int worstIdx = -1;
-
-        for (int j = 0; j < m; j++) {
-            if (blocks[j] >= processes[i]) {
-                if (worstIdx == -1 || blocks[j] > blocks[worstIdx])
-                    worstIdx = j;
-            }
-        }
-
-        if (worstIdx != -1) {
-            allocation[i] = worstIdx;
-            blocks[worstIdx] -= processes[i];
-        }
-    }
-
-    printf("\n--- Worst Fit ---\n");
-    for (int i = 0; i < n; i++)
-        printf("Process %d -> Block %d\n", i+1, allocation[i]+1);
-}
-
-/* ---------------- PAGING ---------------- */
-
-void paging(int pages[], int n, int frames[], int f) {
-    printf("\n--- Paging (Page → Frame Mapping) ---\n");
-
-    for (int i = 0; i < n; i++) {
-        printf("Page %d -> Frame %d\n", pages[i], frames[i % f]);
-    }
-}
-
-/* ---------------- FIFO ---------------- */
-
-void fifo(int pages[], int n, int f) {
-    int frames[MAX], front = 0, faults = 0;
-
-    for (int i = 0; i < f; i++) frames[i] = -1;
-
-    printf("\n--- FIFO Page Replacement ---\n");
-
-    for (int i = 0; i < n; i++) {
+    pthread_mutex_lock(&print_lock);
+    printf("\n--- %s ---\n", d->name);
+    for (int i = 0; i < d->total_pages; i++) {
         int found = 0;
-
-        for (int j = 0; j < f; j++) {
-            if (frames[j] == pages[i]) {
-                found = 1;
-                break;
-            }
+        for (int j = 0; j < d->f; j++) {
+            if (frames[j] == d->pages[i]) { found = 1; break; }
         }
-
         if (!found) {
-            frames[front] = pages[i];
-            front = (front + 1) % f;
+            frames[front] = d->pages[i];
+            front = (front + 1) % d->f;
             faults++;
         }
-
-        printf("Frames: ");
-        for (int j = 0; j < f; j++)
-            printf("%d ", frames[j]);
-        printf("\n");
     }
+    printf("Total Page Faults (FIFO) = %d\n", faults);
+    pthread_mutex_unlock(&print_lock);
 
-    printf("Total Page Faults = %d\n", faults);
-}
-
-/* ---------------- LRU ---------------- */
-
-void lru(int pages[], int n, int f) {
-    int frames[MAX], time[MAX];
-    int faults = 0, counter = 0;
-
-    for (int i = 0; i < f; i++) {
-        frames[i] = -1;
-        time[i] = 0;
-    }
-
-    printf("\n--- LRU Page Replacement ---\n");
-
-    for (int i = 0; i < n; i++) {
-        int found = 0;
-
-        for (int j = 0; j < f; j++) {
-            if (frames[j] == pages[i]) {
-                counter++;
-                time[j] = counter;
-                found = 1;
-                break;
-            }
-        }
-
-        if (!found) {
-            int minTime = 1e9, pos = 0;
-
-            for (int j = 0; j < f; j++) {
-                if (time[j] < minTime) {
-                    minTime = time[j];
-                    pos = j;
-                }
-            }
-
-            frames[pos] = pages[i];
-            counter++;
-            time[pos] = counter;
-            faults++;
-        }
-
-        printf("Frames: ");
-        for (int j = 0; j < f; j++)
-            printf("%d ", frames[j]);
-        printf("\n");
-    }
-
-    printf("Total Page Faults = %d\n", faults);
+    free(frames);
+    return NULL;
 }
 
 /* ---------------- MAIN ---------------- */
-
 int main() {
+    int m = 5, n = 4, f = 3, total_pages = 12;
 
-    int blocks[] = {100, 500, 200, 300, 600};
-    int processes[] = {212, 417, 112, 426};
+    // KEYWORD: malloc - Allocating memory on the HEAP dynamically
+    int *orig_blocks = (int*)malloc(m * sizeof(int));
+    int *processes = (int*)malloc(n * sizeof(int));
+    int *pages = (int*)malloc(total_pages * sizeof(int));
 
-    int pages[] = {1,2,3,4,1,2,5,1,2,3,4,5};
+    int b_init[] = {100, 500, 200, 300, 600};
+    int p_init[] = {212, 417, 112, 426};
+    int pg_init[] = {1,2,3,4,1,2,5,1,2,3,4,5};
 
-    int frames[] = {10, 11, 12};
+    memcpy(orig_blocks, b_init, m * sizeof(int));
+    memcpy(processes, p_init, n * sizeof(int));
+    memcpy(pages, pg_init, total_pages * sizeof(int));
 
-    int m = 5, n = 4, f = 3;
+    pthread_t threads[2];
+    AlgoData d1, d2;
+    pthread_mutex_init(&print_lock, NULL);
 
-    int b1[MAX], b2[MAX];
+    // Setup for Best Fit Thread
+    d1.m = m; d1.n = n;
+    d1.blocks = (int*)malloc(m * sizeof(int)); // Give thread its own copy
+    memcpy(d1.blocks, orig_blocks, m * sizeof(int));
+    d1.processes = processes;
+    strcpy(d1.name, "Best Fit");
 
-    for (int i = 0; i < m; i++) {
-        b1[i] = blocks[i];
-        b2[i] = blocks[i];
-    }
+    // Setup for FIFO Thread
+    d2.f = f; d2.total_pages = total_pages;
+    d2.pages = pages;
+    strcpy(d2.name, "FIFO");
 
-    bestFit(b1, m, processes, n);
-    worstFit(b2, m, processes, n);
+    pthread_create(&threads[0], NULL, bestFitThread, &d1);
+    pthread_create(&threads[1], NULL, fifoThread, &d2);
 
-    paging(pages, 12, frames, f);
+    pthread_join(threads[0], NULL);
+    pthread_join(threads[1], NULL);
 
-    fifo(pages, 12, f);
-    lru(pages, 12, f);
+    // KEYWORD: free - Releasing the heap memory to prevent memory leaks
+    free(orig_blocks); free(processes); free(pages);
+    free(d1.blocks);
+    pthread_mutex_destroy(&print_lock);
 
     return 0;
 }
